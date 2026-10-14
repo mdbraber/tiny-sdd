@@ -6,6 +6,10 @@ const CRITERION_PATTERN = /^C\d+$/u;
 // A pnpm workspace has a node_modules per package.
 const MAX_DEPENDENCY_MOUNTS = 64;
 const MAX_CHECKS = 16;
+const GIB = 1024 * 1024 * 1024;
+// Native tools (Vite's bundler, esbuild) reserve address space far beyond what they use, so a
+// check may raise the runner's 8 GiB RLIMIT_AS; memory in files stays bounded by the tmpfs sizes.
+const MAX_ADDRESS_SPACE_BYTES = 64 * GIB;
 const MAX_ARGV = 64;
 const MAX_ARG_BYTES = 4096;
 
@@ -66,7 +70,7 @@ export function parseChecksManifest(text) {
   for (const [index, check] of value.checks.entries()) {
     const label = `check ${index + 1}`;
     assertPlainObject(check, 'CHECKS_MANIFEST_INVALID', label);
-    assertExactKeys(check, ['id', 'argv', 'timeoutMs', 'criteria'], 'CHECKS_MANIFEST_INVALID', label);
+    assertExactKeys(check, ['id', 'argv', 'timeoutMs', 'addressSpaceBytes', 'criteria'], 'CHECKS_MANIFEST_INVALID', label);
     if (typeof check.id !== 'string' || !CHECK_ID_PATTERN.test(check.id)) invalid(`${label}.id must match /^[a-z0-9][a-z0-9_-]{0,63}$/`);
     if (idsSeen.has(check.id)) invalid(`checks contains duplicate id: ${check.id}`);
     idsSeen.add(check.id);
@@ -97,6 +101,12 @@ export function parseChecksManifest(text) {
       timeoutMs = check.timeoutMs;
     }
     const normalized = { id: check.id, argv, timeoutMs };
+    if (check.addressSpaceBytes !== undefined) {
+      if (!Number.isSafeInteger(check.addressSpaceBytes) || check.addressSpaceBytes < GIB || check.addressSpaceBytes > MAX_ADDRESS_SPACE_BYTES) {
+        invalid(`${label}.addressSpaceBytes must be an integer from ${GIB} (1 GiB) to ${MAX_ADDRESS_SPACE_BYTES} (64 GiB)`);
+      }
+      normalized.addressSpaceBytes = check.addressSpaceBytes;
+    }
     if (check.criteria !== undefined) normalized.criteria = parseCriteria(check.criteria, `${label}.criteria`);
     checks.push(normalized);
   }

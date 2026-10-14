@@ -650,7 +650,9 @@ mounts (a pnpm workspace has a `node_modules` per package). A mount's recorded
 identity covers each entry's path, kind, mode, size and modification time, not
 its bytes, so a large `node_modules` costs one `lstat` per entry; a symlink in a
 mount may point anywhere inside the project, not outside it. The check sandbox
-has no network but resolves `localhost` through its own `/etc/hosts`.
+has no network but resolves `localhost` through its own `/etc/hosts`. A check may
+declare `addressSpaceBytes` (1 GiB to 64 GiB) to raise its 8 GiB address-space
+limit, for native tools such as Vite's bundler that reserve far more than they use.
 
 `checks.jsonl` and bounded output artifacts retain host observations, including
 the digests of the candidate bytes checked. `result.workerObservedChecks` labels

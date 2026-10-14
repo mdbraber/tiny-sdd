@@ -771,7 +771,8 @@ one JSON result. Dependency mounts cannot overlap allowed
 paths; a manifest declares at most 64. A mount's identity records each entry's
 path, kind, mode, size and modification time rather than its bytes, and a
 symlink in a mount may point inside the project but not outside it. The check
-sandbox resolves `localhost` through its own `/etc/hosts`. `limits.maxCheckRuns` defaults to 12 (integer 1–20), charged per individual
+sandbox resolves `localhost` through its own `/etc/hosts`, and a check may declare
+`addressSpaceBytes` (1–64 GiB) to raise its 8 GiB address-space limit. `limits.maxCheckRuns` defaults to 12 (integer 1–20), charged per individual
 check. Budget exhaustion, unknown ids and runner unavailability throw tool
 errors and do not end the worker. Pi 1.0.0 makes a batch containing `run_checks`
 sequential in assistant source order: `[write, run_checks]` sees the write;

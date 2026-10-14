@@ -236,7 +236,8 @@ export async function createCheckChannel({ manifest, sourceRoot, workspace, arti
         record.candidateEntries = candidate.candidateEntries;
         const timeoutMs = Math.min(declaration.timeoutMs, deadline - Date.now());
         if (timeoutMs < 1000 || abort.signal.aborted) throw Object.assign(new Error('worker deadline prevents execution'), { code: 'CHECK_DEADLINE' });
-        const result = await runner({ candidateDir: scratch, check: { id: declaration.id, argv: declaration.argv, timeoutMs }, dependencyMounts: mounts, nodeRoot, tempRoot, signal: abort.signal });
+        const limits = declaration.addressSpaceBytes === undefined ? {} : { limits: { addressSpaceBytes: declaration.addressSpaceBytes } };
+        const result = await runner({ candidateDir: scratch, check: { id: declaration.id, argv: declaration.argv, timeoutMs }, dependencyMounts: mounts, nodeRoot, tempRoot, signal: abort.signal, ...limits });
         const outputPath = join(artifactDir, `check-${count}.txt`);
         const truncated = outputWasTruncated(result.output);
         await writeFile(outputPath, result.output.text, { mode: 0o600 });

@@ -420,3 +420,35 @@ test('a dependency mount may link into the rest of the project but not outside i
     await rm(outside, { recursive: true, force: true });
   }
 });
+
+test('check channel hands a check its declared address-space limit, and no limit otherwise', async () => {
+  const root = await mkdtemp(join(canonicalTmpdir, 'tinysdd-channel-limits-'));
+  const workspace = join(root, 'workspace');
+  await mkdir(join(workspace, 'src'), { recursive: true });
+  await writeFile(join(workspace, 'src', 'allowed.txt'), 'x\n');
+  const calls = [];
+  const channel = await createCheckChannel({
+    manifest: { schemaVersion: 1, dependencyMounts: [], checks: [{ id: 'big', argv: ['node'], timeoutMs: 1000, addressSpaceBytes: 32 * 1024 ** 3 }, { id: 'plain', argv: ['node'], timeoutMs: 1000 }] },
+    sourceRoot: root,
+    workspace,
+    artifactDir: root,
+    tempRoot: canonicalTmpdir,
+    allowedPaths: ['src/allowed.txt'],
+    maxCheckRuns: 2,
+    nodeRoot: root,
+    runner: async (options) => {
+      calls.push(options);
+      return { exitCode: 0, signal: null, timedOut: false, durationMs: 1, output: { text: '', tail: '', totalBytes: 0, truncated: false } };
+    },
+  });
+  try {
+    channel.start(5000);
+    await writeFile(join(channel.requests, `${'b'.repeat(64)}.json`), JSON.stringify({}));
+    channel.poll();
+    await waitFor(join(channel.responses, `${'b'.repeat(64)}.json`));
+    assert.deepEqual(calls.map((call) => call.limits), [{ addressSpaceBytes: 32 * 1024 ** 3 }, undefined]);
+  } finally {
+    await channel.cleanup();
+    await rm(root, { recursive: true, force: true });
+  }
+});
