@@ -645,7 +645,12 @@ sequentially in assistant source order: `[write, run_checks]` observes that
 write; `[run_checks, write]` checks the earlier candidate. The tool does not
 reorder sibling writes. Checks share
 the worker wall-clock deadline and are cancelled when the worker ends. Declared
-dependency mounts cannot overlap any allowed path.
+dependency mounts cannot overlap any allowed path. A manifest declares at most 64
+mounts (a pnpm workspace has a `node_modules` per package). A mount's recorded
+identity covers each entry's path, kind, mode, size and modification time, not
+its bytes, so a large `node_modules` costs one `lstat` per entry; a symlink in a
+mount may point anywhere inside the project, not outside it. The check sandbox
+has no network but resolves `localhost` through its own `/etc/hosts`.
 
 `checks.jsonl` and bounded output artifacts retain host observations, including
 the digests of the candidate bytes checked. `result.workerObservedChecks` labels
