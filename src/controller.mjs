@@ -2081,6 +2081,7 @@ export async function dispatchWorker(projectRoot, options = {}) {
     packet: reviewFeedback === undefined ? packet : { ...packet, review: reviewFeedback },
     worker: resolved.worker,
     profile: resolved.profile,
+    secretExceptions: resolved.config.secretExceptions ?? [],
     runtime: options.runtime,
     qualification,
     baseRunId: options.baseRunId,

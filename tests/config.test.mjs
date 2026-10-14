@@ -302,3 +302,11 @@ test('profiles may set a thinking budget field and per-level budgets, strictly',
     await cleanup(root);
   }
 });
+
+test('config.secretExceptions takes exact project-relative paths', () => {
+  const document = validateConfigDocument({ schemaVersion: 1, workers: {}, secretExceptions: ['packages/text-parsing/src/tnql-tokens/tokens.ts'] });
+  assert.deepEqual(document.secretExceptions, ['packages/text-parsing/src/tnql-tokens/tokens.ts']);
+  for (const secretExceptions of ['tokens.ts', ['../outside/tokens.ts'], ['/abs/tokens.ts'], ['a.ts', 'a.ts']]) {
+    assert.throws(() => validateConfigDocument({ schemaVersion: 1, workers: {}, secretExceptions }), { code: 'CONFIG_INVALID' }, JSON.stringify(secretExceptions));
+  }
+});

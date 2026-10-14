@@ -19,6 +19,7 @@ export const DEFAULT_TIMEOUT_MS = 300_000;
 export const MAX_TIMEOUT_MS = 3_600_000;
 export const DEFAULT_MAX_TOOL_CALLS = 40;
 export const MAX_TOOL_CALLS = 100;
+const MAX_SECRET_EXCEPTIONS = 64;
 
 const WORKER_KEYS = ['type', 'provider', 'model', 'profile', 'skills', 'instructions', 'limits', 'modelMetadata'];
 const MODEL_METADATA_KEYS = ['quantization', 'server'];
@@ -196,7 +197,7 @@ function validateQualification(raw, label = 'config.qualification') {
 
 export function validateConfigDocument(raw) {
   assertPlainObject(raw, 'CONFIG_INVALID', 'config');
-  assertExactKeys(raw, ['schemaVersion', 'defaultWorker', 'workers', 'semanticGate', 'qualification', 'phaseGates', 'testReview', 'featureIntegration'], 'CONFIG_INVALID', 'config');
+  assertExactKeys(raw, ['schemaVersion', 'defaultWorker', 'workers', 'semanticGate', 'qualification', 'phaseGates', 'testReview', 'featureIntegration', 'secretExceptions'], 'CONFIG_INVALID', 'config');
   if (raw.schemaVersion !== CONFIG_SCHEMA_VERSION) {
     throw tinyError('CONFIG_INVALID', `config.schemaVersion must be ${CONFIG_SCHEMA_VERSION}`);
   }
@@ -210,6 +211,7 @@ export function validateConfigDocument(raw) {
   const phaseGates = raw.phaseGates === undefined ? undefined : validatePhasePolicy(raw.phaseGates);
   const testReview = raw.testReview === undefined ? undefined : validateTestReviewPolicy(raw.testReview);
   const featureIntegration = raw.featureIntegration === undefined ? undefined : validateFeatureIntegrationConfig(raw.featureIntegration);
+  const secretExceptions = raw.secretExceptions === undefined ? undefined : validateSecretExceptions(raw.secretExceptions);
   return {
     schemaVersion: CONFIG_SCHEMA_VERSION,
     ...(defaultWorker === undefined ? {} : { defaultWorker }),
@@ -219,7 +221,25 @@ export function validateConfigDocument(raw) {
     ...(phaseGates === undefined ? {} : { phaseGates }),
     ...(testReview === undefined ? {} : { testReview }),
     ...(featureIntegration === undefined ? {} : { featureIntegration }),
+    ...(secretExceptions === undefined ? {} : { secretExceptions }),
   };
+}
+
+// A file whose name only looks like a secret (`tokens.ts` holding source) is named here, one
+// exact path at a time, to reach the worker's copy. The scope check still refuses a change to it.
+function validateSecretExceptions(value) {
+  if (!Array.isArray(value) || value.length > MAX_SECRET_EXCEPTIONS) {
+    throw tinyError('CONFIG_INVALID', `config.secretExceptions must be an array of at most ${MAX_SECRET_EXCEPTIONS} project-relative file paths`);
+  }
+  const paths = value.map((path, index) => {
+    try {
+      return normalizeProjectRelative(path, `config.secretExceptions[${index}]`);
+    } catch (error) {
+      throw tinyError('CONFIG_INVALID', error instanceof Error ? error.message : String(error));
+    }
+  });
+  if (new Set(paths).size !== paths.length) throw tinyError('CONFIG_INVALID', 'config.secretExceptions contains a duplicate path');
+  return paths;
 }
 
 export function validateLocalDocument(raw) {
@@ -383,6 +403,7 @@ export async function resolveConfig(projectRoot, options = {}) {
     ...(local.phaseGates === undefined && base.phaseGates === undefined ? {} : { phaseGates: local.phaseGates ?? base.phaseGates }),
     ...(local.testReview === undefined && base.testReview === undefined ? {} : { testReview: local.testReview ?? base.testReview }),
     ...(local.featureIntegration === undefined && base.featureIntegration === undefined ? {} : { featureIntegration: local.featureIntegration ?? base.featureIntegration }),
+    ...(base.secretExceptions === undefined ? {} : { secretExceptions: base.secretExceptions }),
     workers: effectiveWorkers,
   };
   const selectedWorkerName = selectedName ?? defaultWorker;

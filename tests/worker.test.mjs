@@ -1708,6 +1708,37 @@ describe("Pi worker capture and scope", () => {
     }
   });
 
+  test("a file listed as a secret exception reaches the copy; other secret names still do not", async () => {
+    const project = await makeGitProject();
+    const destinations = [];
+    const destination = async () => {
+      const path = await mkdtemp(join(canonicalTmpdir, "tinysdd-copy-test-"));
+      destinations.push(path);
+      return path;
+    };
+    try {
+      await mkdir(join(project, "src", "lexer"), { recursive: true });
+      await writeFile(join(project, "src", "lexer", "tokens.ts"), "export const TokenKind = {};\n");
+      await writeFile(join(project, "src", "lexer", "token.ts"), "export const other = 1;\n");
+      await git(project, "add", "src/lexer/tokens.ts", "src/lexer/token.ts");
+      const walked = await mkdtemp(join(canonicalTmpdir, "tinysdd-copy-walk-"));
+      destinations.push(walked);
+      await mkdir(join(walked, "src", "lexer"), { recursive: true });
+      await writeFile(join(walked, "src", "lexer", "tokens.ts"), "export const TokenKind = {};\n");
+      await writeFile(join(walked, "src", "lexer", "token.ts"), "export const other = 1;\n");
+      for (const [root, useGit] of [[project, true], [walked, false]]) {
+        const unlisted = await copyProjectTree(root, await destination(), { useGit });
+        assert.equal(unlisted.copied.has("src/lexer/tokens.ts"), false, `useGit ${useGit}`);
+        const listed = await copyProjectTree(root, await destination(), { useGit, secretExceptions: ["src/lexer/tokens.ts"] });
+        assert.equal(listed.copied.has("src/lexer/tokens.ts"), true, `useGit ${useGit}`);
+        assert.equal(listed.copied.has("src/lexer/token.ts"), false, `useGit ${useGit}`);
+      }
+    } finally {
+      await rm(project, { recursive: true, force: true });
+      for (const path of destinations) await rm(path, { recursive: true, force: true });
+    }
+  });
+
   test("git copy keeps symlink rejection, skips deleted tracked files and enforces limits", async () => {
     const project = await makeGitProject();
     const destinations = [];

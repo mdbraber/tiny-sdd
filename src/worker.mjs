@@ -163,8 +163,10 @@ async function ensureProjectPath(root, relPath, { allowMissing = false, regular 
   return { path: target, rel: safe, exists: true };
 }
 
+const BUILTIN_EXCLUDED = [".git", ".tinysdd", "node_modules"];
+
 function excludedName(name, directory) {
-  if ([".git", ".tinysdd", "node_modules"].includes(unicodeCaseFold(name))) return true;
+  if (BUILTIN_EXCLUDED.includes(unicodeCaseFold(name))) return true;
   if (directory && PROJECT_SECRET_DIR.test(name)) return true;
   return PROJECT_SECRET_NAME.test(name);
 }
@@ -221,8 +223,15 @@ async function gitCopyList(sourceRoot) {
  * worker while new untracked source does.  Everything else (no Git, Git
  * unavailable, or an immutable baseline snapshot) uses the recursive walk.
  */
-export async function copyProjectTree(sourceRoot, destinationRoot, { useGit = true, maxFiles = MAX_COPY_FILES, maxBytes = MAX_COPY_BYTES } = {}) {
+export async function copyProjectTree(sourceRoot, destinationRoot, { useGit = true, maxFiles = MAX_COPY_FILES, maxBytes = MAX_COPY_BYTES, secretExceptions = [] } = {}) {
   const counters = { files: 0, bytes: 0 };
+  const exceptions = new Set(secretExceptions);
+  // A listed file's own name is not taken for a secret; its folders' names still are.
+  const excludedPath = (parts) => parts.some((part, index) => {
+    const directory = index < parts.length - 1;
+    if (!directory && exceptions.has(parts.join("/")) && !BUILTIN_EXCLUDED.includes(unicodeCaseFold(part))) return false;
+    return excludedName(part, directory);
+  });
   const copied = new Set();
   const count = (size) => {
     counters.files += 1;
@@ -234,7 +243,7 @@ export async function copyProjectTree(sourceRoot, destinationRoot, { useGit = tr
     await mkdir(destination, { recursive: true, mode: 0o700 });
     for (const entry of entries) {
       const rel = relativePath ? `${relativePath}/${entry.name}` : entry.name;
-      if (excludedName(entry.name, entry.isDirectory())) continue;
+      if (entry.isDirectory() ? excludedName(entry.name, true) : excludedPath(rel.split("/"))) continue;
       const sourcePath = join(source, entry.name);
       const destinationPath = join(destination, entry.name);
       const info = await lstat(sourcePath);
@@ -262,7 +271,7 @@ export async function copyProjectTree(sourceRoot, destinationRoot, { useGit = tr
     // names) before path validation: a committed or unignored .tinysdd/ is
     // normal and must be skipped, not rejected as controller state.
     const listedParts = listed.split("/");
-    if (listedParts.some((part, index) => excludedName(part, index < listedParts.length - 1))) continue;
+    if (excludedPath(listedParts)) continue;
     const rel = projectRelative(listed, "git-listed path");
     const parts = rel.split("/");
     let parentMissing = false;
@@ -1655,7 +1664,7 @@ function runtimeMetadata(prepared, runtime, pi, bwrap, worker, profile, piVersio
  * harness explicitly enables it.  Production callers use the four documented
  * arguments and therefore require Linux bubblewrap or macOS Seatbelt.
  */
-export async function runWorker({ projectRoot, packet, worker, profile, runtime, baseRunId, baselineRunId, signal, qualification } = {}) {
+export async function runWorker({ projectRoot, packet, worker, profile, runtime, baseRunId, baselineRunId, signal, qualification, secretExceptions = [] } = {}) {
   const { absolute: sourceRoot } = await ensureRoot(projectRoot);
   const tempRoot = await temporaryRoot();
   const normalizedPacket = normalizePacket(packet);
@@ -1769,7 +1778,7 @@ export async function runWorker({ projectRoot, packet, worker, profile, runtime,
   let capture;
   let patchInfo;
   let result;
-    const workspaceCopy = await copyProjectTree(executionSource, workspace, { useGit: !frozenBaseline });
+    const workspaceCopy = await copyProjectTree(executionSource, workspace, { useGit: !frozenBaseline, secretExceptions });
     await assertCopiedInputs(executionSource, workspaceCopy, selectedAllowed, normalizedPacket.protectedPaths, normalizedPacket.preparation ?? [], compiledContext);
     await overlayRevisionBase(revisionBase, workspace);
     await copyRegularTree(workspace, baseline);

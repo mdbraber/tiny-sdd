@@ -958,7 +958,10 @@ and point to local evidence and a patch under `.tinysdd/runs/`; the operator
 still owns independent verification. The worker does not apply the patch,
 commit, or accept its own result. Inference can reach the selected
 provider; use only source you are authorized to send there. Raw event files may
-contain source. Filename exclusions are not a general secret scanner.
+contain source. Filename exclusions are not a general secret scanner. A file whose
+name only looks like a credential (`tokens.ts` holding source) reaches the copy when
+`.tinysdd/config.json` lists its exact project-relative path in `secretExceptions`; a
+change to it is still refused as a secret path.
 The candidate omits `.git`, `.tinysdd`, `node_modules` and common credential files;
 source symlinks are rejected. In a Git work tree the copy set is
 `git ls-files --cached --others --exclude-standard`, so gitignored files (runtime
