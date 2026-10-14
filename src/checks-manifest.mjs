@@ -3,7 +3,8 @@ import { assertExactKeys, assertPlainObject, normalizeProjectRelative, tinyError
 export const CHECKS_MANIFEST_SCHEMA_VERSION = 1;
 const CHECK_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
 const CRITERION_PATTERN = /^C\d+$/u;
-const MAX_DEPENDENCY_MOUNTS = 8;
+// A pnpm workspace has a node_modules per package.
+const MAX_DEPENDENCY_MOUNTS = 64;
 const MAX_CHECKS = 16;
 const MAX_ARGV = 64;
 const MAX_ARG_BYTES = 4096;
