@@ -7,7 +7,7 @@
 // (the kernel does not apply RLIMIT_NPROC to root), and without setpriv the
 // runner refuses to run. Nothing here is verification or acceptance evidence.
 import { accessSync, constants as fsConstants, createWriteStream, statSync } from 'node:fs';
-import { lchown, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm } from 'node:fs/promises';
+import { lchown, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { dirname, isAbsolute, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -34,6 +34,7 @@ const MIN_TIMEOUT_MS = 1000;
 const MAX_TIMEOUT_MS = 600000;
 const KILL_GRACE_MS = 2000;
 const HEAD_BYTES = 1024;
+const LOOPBACK_HOSTS = '127.0.0.1 localhost\n::1 localhost\n';
 const BWRAP_DEFAULTS = ['/usr/bin/bwrap', '/bin/bwrap'];
 const PRLIMIT_DEFAULTS = ['/usr/bin/prlimit'];
 const SETPRIV_DEFAULTS = ['/usr/bin/setpriv', '/bin/setpriv'];
@@ -473,7 +474,7 @@ function nestedUserNamespaces(binaries, runAs, signal, deadline) {
   });
 }
 
-function sandboxArguments({ binaries, nodeRoot, input, mounts, limits, check, processLimit, nestedUserns }) {
+function sandboxArguments({ binaries, nodeRoot, input, hosts, mounts, limits, check, processLimit, nestedUserns }) {
   const tmpfsSize = String(limits.tmpfsBytes);
   return [
     `--as=${limits.addressSpaceBytes}`,
@@ -488,6 +489,8 @@ function sandboxArguments({ binaries, nodeRoot, input, mounts, limits, check, pr
     // its capabilities; stating it keeps that true if it were ever not.
     '--cap-drop', 'ALL',
     '--ro-bind', '/usr', '/usr', '--ro-bind', '/bin', '/bin', '--ro-bind', '/lib', '/lib', '--ro-bind-try', '/lib64', '/lib64',
+    // There is no network, but tools that start a local server (Vite, Vitest) look up `localhost`.
+    '--dir', '/etc', '--ro-bind', hosts, '/etc/hosts',
     '--dir', '/opt', '--ro-bind', nodeRoot, '/opt/node',
     '--proc', '/proc', '--dev', '/dev',
     '--size', tmpfsSize, '--tmpfs', '/tmp',
@@ -657,6 +660,8 @@ export async function runCheck(options) {
   }
   try {
     const input = join(scratch, 'input');
+    const hosts = join(scratch, 'hosts');
+    await writeFile(hosts, LOOPBACK_HOSTS, { mode: 0o644 });
     await mkdir(input, { mode: 0o700 });
     await copyDirectory(request.candidateDir, input, { used: 0, limit: request.limits.scratchBytes }, '', options.signal, setupDeadline).catch((error) => {
       throw copyFailure(error);
@@ -676,6 +681,7 @@ export async function runCheck(options) {
       binaries,
       nodeRoot: request.nodeRoot,
       input,
+      hosts,
       mounts: request.mounts,
       limits: request.limits,
       check: request.check,

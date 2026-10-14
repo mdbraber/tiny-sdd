@@ -432,9 +432,11 @@ describe('check runner', { skip: SKIP }, () => {
     assert.equal(result.exitCode, 0, result.output.text);
     // 64 MiB fit next to the candidate; the next file runs out of space in the tmpfs.
     assert.match(result.output.text, /written 64 ENOSPC/u);
-    // What the host holds is the copy of the candidate and nothing the check wrote.
+    // What the host holds is the copy of the candidate and the runner's hosts file, and nothing
+    // the check wrote.
     assert.ok(largest > 0, 'the sampler never saw the host copy');
-    assert.ok(largest <= Buffer.byteLength(script), `the host scratch grew to ${largest} bytes`);
+    const hostsBytes = Buffer.byteLength('127.0.0.1 localhost\n::1 localhost\n');
+    assert.ok(largest <= Buffer.byteLength(script) + hostsBytes, `the host scratch grew to ${largest} bytes`);
   });
 
   test('a timeout kills the process group and the sandbox, and reports timedOut', async () => {
@@ -1188,7 +1190,8 @@ describe('check runner', { skip: SKIP }, () => {
       const candidate = await makeDir({ 't.test.mjs': PASSING_TEST });
       const dump = join(fixtures, `args-${counter}.txt`);
       const environmentDump = join(fixtures, `env-${counter}.txt`);
-      const prlimitPath = await stubExecutable(`printf '%s\\n' "$@" > '${dump}'\n/usr/bin/env > '${environmentDump}'`);
+      const hostsDump = join(fixtures, `hosts-${counter}.txt`);
+      const prlimitPath = await stubExecutable(`printf '%s\\n' "$@" > '${dump}'\n/usr/bin/env > '${environmentDump}'\nfor a in "$@"; do case "$a" in */tinysdd-check-*/hosts) cp "$a" '${hostsDump}';; esac; done`);
       const previous = process.env.TINYSDD_SECRET_PROBE;
       process.env.TINYSDD_SECRET_PROBE = 'x';
       let sandbox;
@@ -1210,6 +1213,11 @@ describe('check runner', { skip: SKIP }, () => {
       assert.equal(sequence('--unshare-user', '--disable-userns'), sandbox.nestedUserNamespaces === 'disabled');
       assert.ok(sequence('--ro-bind', dirname(dirname(process.execPath)), '/opt/node'));
       assert.ok(sequence('--ro-bind', dependencies, '/work/node_modules'));
+      // Tools that start a local server look up `localhost`; the sandbox has no network.
+      const hosts = bwrapArgs.indexOf('/etc/hosts');
+      assert.deepEqual(bwrapArgs.slice(hosts - 4, hosts - 1), ['--dir', '/etc', '--ro-bind']);
+      assert.ok(bwrapArgs[hosts - 1].startsWith(`${scratchRoot}/tinysdd-check-`) && bwrapArgs[hosts - 1].endsWith('/hosts'));
+      assert.equal(await readFile(hostsDump, 'utf8'), '127.0.0.1 localhost\n::1 localhost\n');
       assert.ok(sequence('--unshare-all', '--new-session'));
       assert.ok(sequence('--setenv', 'HOME', '/tmp'));
       assert.ok(sequence('--size', String(256 * MIB), '--tmpfs', '/tmp'));
