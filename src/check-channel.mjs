@@ -20,10 +20,15 @@ const inside = (root, candidate) => {
   return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !path.startsWith(sep));
 };
 
-const MAX_IDENTITY_ENTRIES = 20000;
-const MAX_IDENTITY_BYTES = 512 * 1024 * 1024;
+// The identity says whether a mount changed between runs, so it records each entry's metadata
+// rather than its bytes: a pnpm node_modules holds about 10^5 files and a gigabyte, which
+// hashing in full would cost on every worker start. A rewrite that keeps a file's size and
+// modification time is not seen; an install, an upgrade or an edit is.
+const MAX_IDENTITY_ENTRIES = 1_000_000;
 
-async function fingerprintDirectory(source) {
+// A symlink may point anywhere inside the project: inside the sandbox the project's paths are the
+// candidate and the other mounts (pnpm links a package's node_modules into the root one).
+async function fingerprintDirectory(source, projectRoot) {
   const records = [];
   let bytes = 0;
   let entryCount = 0;
@@ -34,38 +39,23 @@ async function fingerprintDirectory(source) {
     const entries = [];
     for await (const entry of await opendir(current)) entries.push(entry);
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    for (const entry of entries) {
+    if (entryCount + entries.length > MAX_IDENTITY_ENTRIES) throw new Error('dependency mount exceeds the identity entry limit');
+    const infos = await Promise.all(entries.map((entry) => lstat(join(current, entry.name))));
+    for (const [index, entry] of entries.entries()) {
       const path = prefix ? `${prefix}/${entry.name}` : entry.name;
       const absolute = join(current, entry.name);
-      const info = await lstat(absolute);
-      if (++entryCount > MAX_IDENTITY_ENTRIES) throw new Error('dependency mount exceeds the identity entry limit');
+      const info = infos[index];
+      entryCount += 1;
       if (info.isDirectory()) {
         records.push({ path, kind: 'directory', mode: info.mode & 0o7777 });
         await visit(absolute, path);
       } else if (info.isFile()) {
-        const input = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-        try {
-          const opened = await input.stat();
-          if (!opened.isFile() || opened.ino !== info.ino || opened.dev !== info.dev) throw new Error('dependency mount changed while fingerprinting');
-          const hash = createHash('sha256');
-          const buffer = Buffer.alloc(64 * 1024);
-          let position = 0;
-          while (true) {
-            const { bytesRead } = await input.read(buffer, 0, buffer.length, position);
-            if (!bytesRead) break;
-            position += bytesRead;
-            bytes += bytesRead;
-            if (bytes > MAX_IDENTITY_BYTES) throw new Error('dependency mount exceeds the identity byte limit');
-            hash.update(buffer.subarray(0, bytesRead));
-          }
-          records.push({ path, kind: 'file', mode: info.mode & 0o7777, bytes: opened.size, sha256: hash.digest('hex') });
-        } finally {
-          await input.close();
-        }
+        bytes += info.size;
+        records.push({ path, kind: 'file', mode: info.mode & 0o7777, bytes: info.size, mtimeMs: info.mtimeMs });
       } else if (info.isSymbolicLink()) {
         const target = await readlink(absolute);
         const resolvedTarget = resolve(dirname(absolute), target);
-        if (!inside(source, resolvedTarget)) throw new Error(`dependency mount symlink escapes its source: ${path}`);
+        if (!inside(projectRoot, resolvedTarget)) throw new Error(`dependency mount symlink escapes the project: ${path}`);
         records.push({ path, kind: 'symlink', target });
       } else {
         throw new Error(`dependency mount contains an unsupported entry: ${path}`);
@@ -75,7 +65,7 @@ async function fingerprintDirectory(source) {
   await visit(source);
   const serialized = JSON.stringify(records);
   return {
-    algorithm: 'sha256-tree-v1',
+    algorithm: 'sha256-tree-metadata-v1',
     sha256: digest(serialized),
     entries: entryCount,
     bytes,
@@ -175,7 +165,7 @@ export async function createCheckChannel({ manifest, sourceRoot, workspace, arti
   }
   const mountIdentities = [];
   for (const mount of mounts) {
-    const tree = await fingerprintDirectory(mount.source);
+    const tree = await fingerprintDirectory(mount.source, sourceRoot);
     mountIdentities.push({ target: mount.target, source: mount.source, ...tree });
   }
   const dependencyIdentity = {

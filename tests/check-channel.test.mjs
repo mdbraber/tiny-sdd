@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, open, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -347,5 +347,76 @@ test('run_checks extension writes a request and returns the channel response', a
     else process.env.TINYSDD_CHECK_DEADLINE = previousDeadline;
     await channel.cleanup();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function mountIdentity(root, dependencyMounts) {
+  const channel = await createCheckChannel({
+    manifest: { schemaVersion: 1, dependencyMounts, checks: [{ id: 'unit', argv: ['node'], timeoutMs: 1000 }] },
+    sourceRoot: root,
+    workspace: join(root, 'workspace'),
+    artifactDir: root,
+    tempRoot: canonicalTmpdir,
+    allowedPaths: ['src/allowed.txt'],
+    maxCheckRuns: 1,
+    nodeRoot: root,
+    runner: async () => { throw new Error('unreachable'); },
+  });
+  try {
+    return channel.dependencyIdentity;
+  } finally {
+    await channel.cleanup();
+  }
+}
+
+test('dependency mount identity records metadata and changes when a file changes', async () => {
+  const root = await mkdtemp(join(canonicalTmpdir, 'tinysdd-channel-identity-'));
+  try {
+    await mkdir(join(root, 'node_modules', 'pkg'), { recursive: true });
+    await writeFile(join(root, 'node_modules', 'pkg', 'index.js'), 'one\n');
+    const first = await mountIdentity(root, ['node_modules']);
+    const again = await mountIdentity(root, ['node_modules']);
+    await writeFile(join(root, 'node_modules', 'pkg', 'index.js'), 'one two\n');
+    const changed = await mountIdentity(root, ['node_modules']);
+    assert.equal(first.mounts[0].algorithm, 'sha256-tree-metadata-v1');
+    assert.equal(first.mounts[0].entries, 2);
+    assert.equal(first.mounts[0].bytes, 4);
+    assert.equal(again.sha256, first.sha256);
+    assert.notEqual(changed.sha256, first.sha256);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('dependency mount identity does not read file contents, so a large mount is no obstacle', async () => {
+  const root = await mkdtemp(join(canonicalTmpdir, 'tinysdd-channel-large-'));
+  try {
+    await mkdir(join(root, 'node_modules'), { recursive: true });
+    const handle = await open(join(root, 'node_modules', 'large.bin'), 'w');
+    await handle.truncate(600 * 1024 * 1024);
+    await handle.close();
+    for (let index = 0; index < 20_001; index += 1) await writeFile(join(root, 'node_modules', `f${index}`), '');
+    const identity = await mountIdentity(root, ['node_modules']);
+    assert.equal(identity.mounts[0].entries, 20_002);
+    assert.equal(identity.mounts[0].bytes, 600 * 1024 * 1024);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a dependency mount may link into the rest of the project but not outside it', async () => {
+  const root = await mkdtemp(join(canonicalTmpdir, 'tinysdd-channel-links-'));
+  const outside = await mkdtemp(join(canonicalTmpdir, 'tinysdd-channel-outside-'));
+  try {
+    await mkdir(join(root, 'node_modules', '.pnpm', 'zod'), { recursive: true });
+    await mkdir(join(root, 'packages', 'a', 'node_modules'), { recursive: true });
+    await symlink('../../../node_modules/.pnpm/zod', join(root, 'packages', 'a', 'node_modules', 'zod'));
+    const identity = await mountIdentity(root, ['node_modules', 'packages/a/node_modules']);
+    assert.equal(identity.mounts[1].entries, 1);
+    await symlink(outside, join(root, 'packages', 'a', 'node_modules', 'escape'));
+    await assert.rejects(mountIdentity(root, ['node_modules', 'packages/a/node_modules']), /symlink escapes the project/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
   }
 });
